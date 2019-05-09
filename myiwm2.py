@@ -7,6 +7,8 @@ import imageio
 import numpy as np
 import cv2
 from scipy.misc import toimage
+from sklearn.neural_network import MLPClassifier
+from sklearn.model_selection import train_test_split
 
 class Window(QtWidgets.QMainWindow):
 
@@ -18,6 +20,11 @@ class Window(QtWidgets.QMainWindow):
 
         self.imgAs2DArray = 0
         self.clahe = 0
+
+        self.dataX = []
+        self.dataY = []
+
+        self.resetCech()
 
         self.label = QtWidgets.QLabel(self)
 
@@ -52,11 +59,17 @@ class Window(QtWidgets.QMainWindow):
         self.btn_prep.clicked.connect(self.preprocessing)
         self.btn_prep.setEnabled(False)
 
-        self.btn_start = QtWidgets.QPushButton("Start!", self)
-        self.btn_start.setGeometry(350, 475, 300, 50)
+        self.btn_start = QtWidgets.QPushButton("Tradycyjna", self)
+        self.btn_start.setGeometry(350, 475, 145, 50)
         self.btn_start.setStyleSheet("font-size: 18px;")
         self.btn_start.clicked.connect(self.start)
         self.btn_start.setEnabled(False)
+
+        self.btn_start_siec = QtWidgets.QPushButton("Sieć", self)
+        self.btn_start_siec.setGeometry(505, 475, 145, 50)
+        self.btn_start_siec.setStyleSheet("font-size: 18px;")
+        self.btn_start_siec.clicked.connect(self.start_siec)
+        self.btn_start_siec.setEnabled(False)
 
         self.btn_post = QtWidgets.QPushButton("Postprocessing", self)
         self.btn_post.setGeometry(670, 475, 300, 50)
@@ -131,6 +144,13 @@ class Window(QtWidgets.QMainWindow):
 
         self.show()
 
+    def resetCech(self):
+        self.moments = []
+        self.hu_moments = []
+        self.srednie = []
+        self.wariancje = []
+        self.decyzje = []
+
     def choose_file(self):
 
         name = QtWidgets.QFileDialog.getOpenFileName(self, 'Open File')
@@ -139,6 +159,8 @@ class Window(QtWidgets.QMainWindow):
         s2 = name[0].split("/")[:-1]
         self.path = s1.join(s2)
         print(self.path)
+
+        self.resetCech()
 
         self.img_name = name[0].split("/")[-1]
         self.img_master_name = self.img_name.split(".")[0] + ".ah." + self.img_name.split(".")[1]
@@ -153,6 +175,8 @@ class Window(QtWidgets.QMainWindow):
         self.btn_prep.setEnabled(True)
 
     def preprocessing(self):
+
+        self.resetCech()
         b, g, r = cv2.split(self.imgAs2DArray)
 
         self.clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
@@ -170,8 +194,168 @@ class Window(QtWidgets.QMainWindow):
         self.imgAs2DArray = contrast_green
         self.btn_prep.setEnabled(False)
         self.btn_start.setEnabled(True)
+        self.btn_start_siec.setEnabled(True)
+
+    def start_siec(self):
+
+        self.btn_start.setEnabled(False)
+        self.btn_start_siec.setEnabled(False)
+
+        zapisDoPliku = True
+
+        if(zapisDoPliku):
+            try:
+                self.ekstraktCech()
+            except Exception as e:
+                print(e)
+
+            plik = open('dane.txt', 'a+')
+            self.saveHuMoments(plik)
+            plik.close()
+            print("Koniec zapisu")
+
+        #self.fileToTab()
+        #self.classifier = self.learn()
+        #self.classify()
+        print("Koniec")
+
+    def classify(self):
+        img = self.imgAs2DArray
+        o_img = np.zeros((img.shape[0], img.shape[1]))
+        for i in range(0, img.shape[0], 5):
+            for j in range(0, img.shape[1], 5):
+                tab5x5 = np.zeros((5, 5, 1))
+                for k in range(5):
+                    for l in range(5):
+                        tab5x5[k][l] = img[i + k][j + l]
+                x = []
+                sre = self.get_srednia(tab5x5)[0]
+                x.append(sre)
+                war = self.get_warrian(tab5x5, sre)[0]
+                x.append(war)
+                moments = cv2.moments(tab5x5)
+                hu_moments = cv2.HuMoments(moments)
+                for z in range(7):
+                    x.append(hu_moments[z][0])
+                try:
+                    x = np.array(x)
+                    #x = x.reshape(1, -1)
+                    if self.classifier.predict([x])[0] > 0:
+                        dec = 1
+                    else:
+                        dec = 0
+
+                    for m in range(5):
+                        for n in range(5):
+                            o_img[i + m][j + n] = 255 * dec
+                except Exception as e:
+                    print(e)
+        try:
+            imgr = toimage(np.array(o_img))
+        except Exception as e:
+            print(e)
+        qim = ImageQt(imgr)
+        pixMap = QtGui.QPixmap.fromImage(qim)
+
+        pixmap = pixMap.scaled(self.image_label2.width(),
+                               self.image_label2.height())
+
+        self.image_label2.setPixmap(pixmap)
+
+    def learn(self):
+        classifier = MLPClassifier(hidden_layer_sizes=(20,), activation='logistic', random_state=1, max_iter=1000,
+                                   warm_start=True)
+        learning = True
+        i = 1
+        while learning:
+            x_train, x_test, y_train, y_test = train_test_split(self.dataX, self.dataY, test_size=0.3, random_state=42)
+            for j in range(15):
+                   classifier.fit(x_train, y_train)
+            print("Learning", i, " ", i * 15)
+            i += 1
+            score = classifier.score(x_test, y_test)
+            print("Score:", score)
+            learning = score < 0.873
+
+        return classifier
+
+    def fileToTab(self):
+        print("Zaczynam czytać z pliku")
+        self.dataX = []
+        self.dataY = []
+        plik = open('dane.txt').read()
+        wiersze = plik.split("\n")
+        for i in wiersze:
+            if(i != ""):
+                wiersz = i.split(";")[1:-1]
+                self.dataY.append(float(wiersz[-1]))
+                wiersz = wiersz[:-1]
+                for j in range(len(wiersz)):
+                    wiersz[j] = float(wiersz[j])
+                self.dataX.append(wiersz)
+
+    def saveHuMoments(self, plik):
+        hu_moments = self.hu_moments
+        for i in range(len(hu_moments)):
+            plik.write(i.__str__()+";")
+            plik.write(self.srednie[i].__str__() + ";")
+            plik.write(self.wariancje[i].__str__() + ";")
+            for j in range(7):
+                plik.write(hu_moments[i][j][0].__str__()+";")
+            plik.write(self.decyzje[i].__str__()+";")
+            plik.write("\n")
+
+    def ekstraktCech(self):
+
+        img = self.imgAs2DArray
+
+        img_mast = cv2.imread(self.path+"/"+self.img_master_name)
+        img_mast = cv2.bitwise_not(img_mast)
+
+        for i in range(0, img.shape[0], 5):
+            for j in range(0, img.shape[1], 5):
+                tab5x5 = np.zeros((5, 5, 1))
+                for k in range(5):
+                    for l in range(5):
+                        if(k == 2 and l == 2):
+                            dec = img_mast[i+k][j+l]               #jaka była decyzja dla tego
+                            self.decyzje.append(dec[0])
+                        tab5x5[k][l] = img[i + k][j + l]
+
+                moments = cv2.moments(tab5x5)
+                self.moments.append(moments)
+                hu_moments = cv2.HuMoments(moments)
+                self.hu_moments.append(hu_moments)
+
+                srednia = self.get_srednia(tab5x5)
+                self.srednie.append(srednia[0])
+
+                wariancja = self.get_warrian(tab5x5, srednia)
+
+                self.wariancje.append(wariancja[0])
+
+    def get_srednia(self, tab5x5):
+        suma = 0
+
+        for m in range(5):
+            for n in range(5):
+                suma += tab5x5[m][n]
+        srednia = suma / (tab5x5.shape[0] * tab5x5.shape[1])
+        return srednia
+
+    def get_warrian(self, tab5x5, srednia):
+        suma_w = 0
+
+        for o in range(5):
+            for p in range(5):
+                suma_w += (tab5x5[o][p] - srednia) ** 2
+        wariancja = suma_w / 5
+        return wariancja
 
     def start(self):
+        self.btn_start.setEnabled(False)
+        self.btn_start_siec.setEnabled(False)
+
         r1 = cv2.morphologyEx(self.imgAs2DArray, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)),
                               iterations=1)
         R1 = cv2.morphologyEx(r1, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)), iterations=1)
@@ -196,7 +380,6 @@ class Window(QtWidgets.QMainWindow):
         self.image_label2.setPixmap(pixmap)
 
         self.imgAs2DArray = f6
-        self.btn_start.setEnabled(False)
         self.btn_post.setEnabled(True)
 
     def postprocessing(self):
@@ -269,6 +452,15 @@ class Window(QtWidgets.QMainWindow):
                         TN += 1
                     elif (img[i][j] == 0):                                                        # A NASZ WYNIK MÓWI ŻE JEST INACZEJ
                         FP += 1
+
+        imgr = toimage(img)
+        qim = ImageQt(imgr)
+        pixMap = QtGui.QPixmap.fromImage(qim)
+
+        pixmap = pixMap.scaled(self.image_label3.width(),
+                               self.image_label3.height())
+
+        self.image_label3.setPixmap(pixmap)
 
         print("TP: " + TP.__str__())
         print("FN: " + FN.__str__())
