@@ -399,12 +399,31 @@ class Window(QtWidgets.QMainWindow):
     def postprocessing(self):
 
         if self.neuron:
+
             matrix = self.imgAs2DArray
+
+            imgr = toimage(matrix)
+            qim = ImageQt(imgr)
+            pixMap = QtGui.QPixmap.fromImage(qim)
+
+            pixmap = pixMap.scaled(self.image_label3.width(),
+                                   self.image_label3.height())
+
+            self.image_label3.setPixmap(pixmap)
+
+            self.imgAs2DArray = matrix
+            self.btn_post.setEnabled(False)
+            QtGui.QGuiApplication.processEvents()
+            self.wyliczMiary()
+
+            return 0
+
         else:
             matrix = self.f5
+            eee = self.imgAs2DArray
         try:
             mask = np.ones(matrix.shape[:2], dtype="uint8") * 255
-            contours, hierarchy = cv2.findContours(self.imgAs2DArray, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE) ##### TU SIE WYWALA, NIE WIEDZIEĆ CZEMU
+            contours, hierarchy = cv2.findContours(eee, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE) ##### TU SIE WYWALA, NIE WIEDZIEĆ CZEMU
             for cnt in contours:
                 if cv2.contourArea(cnt) <= 200:
                     cv2.drawContours(mask, [cnt], -1, 0, -1)
