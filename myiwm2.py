@@ -6,6 +6,9 @@ from PyQt5 import QtGui
 import imageio
 import numpy as np
 import cv2
+from PIL import Image
+from skimage import filters
+from skimage.restoration import denoise_tv_chambolle
 from scipy.misc import toimage
 from sklearn.neural_network import MLPClassifier
 from sklearn.model_selection import train_test_split
@@ -23,6 +26,9 @@ class Window(QtWidgets.QMainWindow):
 
         self.dataX = []
         self.dataY = []
+
+        self.first = True
+        self.neuron = False
 
         self.resetCech()
 
@@ -201,7 +207,9 @@ class Window(QtWidgets.QMainWindow):
         self.btn_start.setEnabled(False)
         self.btn_start_siec.setEnabled(False)
 
-        zapisDoPliku = True
+        self.neuron = True
+
+        zapisDoPliku = False
 
         if(zapisDoPliku):
             try:
@@ -214,9 +222,14 @@ class Window(QtWidgets.QMainWindow):
             plik.close()
             print("Koniec zapisu")
 
-        #self.fileToTab()
-        #self.classifier = self.learn()
-        #self.classify()
+
+        if self.first:
+            self.fileToTab()
+            self.classifier = self.learn()
+            self.first = False
+        self.classify()
+        self.btn_post.setEnabled(True)
+
         print("Koniec")
 
     def classify(self):
@@ -251,6 +264,7 @@ class Window(QtWidgets.QMainWindow):
                 except Exception as e:
                     print(e)
         try:
+            self.imgAs2DArray = o_img
             imgr = toimage(np.array(o_img))
         except Exception as e:
             print(e)
@@ -265,17 +279,16 @@ class Window(QtWidgets.QMainWindow):
     def learn(self):
         classifier = MLPClassifier(hidden_layer_sizes=(20,), activation='logistic', random_state=1, max_iter=1000,
                                    warm_start=True)
+
         learning = True
         i = 1
         while learning:
             x_train, x_test, y_train, y_test = train_test_split(self.dataX, self.dataY, test_size=0.3, random_state=42)
-            for j in range(15):
-                   classifier.fit(x_train, y_train)
-            print("Learning", i, " ", i * 15)
+            classifier.fit(x_train, y_train)
             i += 1
             score = classifier.score(x_test, y_test)
             print("Score:", score)
-            learning = score < 0.873
+            learning = score < 0.733
 
         return classifier
 
@@ -340,7 +353,7 @@ class Window(QtWidgets.QMainWindow):
         for m in range(5):
             for n in range(5):
                 suma += tab5x5[m][n]
-        srednia = suma / (tab5x5.shape[0] * tab5x5.shape[1])
+        srednia = suma / 25
         return srednia
 
     def get_warrian(self, tab5x5, srednia):
@@ -349,12 +362,13 @@ class Window(QtWidgets.QMainWindow):
         for o in range(5):
             for p in range(5):
                 suma_w += (tab5x5[o][p] - srednia) ** 2
-        wariancja = suma_w / 5
+        wariancja = suma_w / 25
         return wariancja
 
     def start(self):
         self.btn_start.setEnabled(False)
         self.btn_start_siec.setEnabled(False)
+        self.neuron = False
 
         r1 = cv2.morphologyEx(self.imgAs2DArray, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)),
                               iterations=1)
@@ -384,28 +398,34 @@ class Window(QtWidgets.QMainWindow):
 
     def postprocessing(self):
 
-        mask = np.ones(self.f5.shape[:2], dtype="uint8") * 255
-        contours, hierarchy = cv2.findContours(self.imgAs2DArray.copy(), cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
-        for cnt in contours:
-            if cv2.contourArea(cnt) <= 200:
-                cv2.drawContours(mask, [cnt], -1, 0, -1)
-        im = cv2.bitwise_and(self.f5, self.f5, mask=mask)
-        ret, fin = cv2.threshold(im, 15, 255, cv2.THRESH_BINARY_INV)
-        newfin = cv2.erode(fin, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)), iterations=1)
+        if self.neuron:
+            matrix = self.imgAs2DArray
+        else:
+            matrix = self.f5
+        try:
+            mask = np.ones(matrix.shape[:2], dtype="uint8") * 255
+            contours, hierarchy = cv2.findContours(self.imgAs2DArray, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE) ##### TU SIE WYWALA, NIE WIEDZIEĆ CZEMU
+            for cnt in contours:
+                if cv2.contourArea(cnt) <= 200:
+                    cv2.drawContours(mask, [cnt], -1, 0, -1)
+            im = cv2.bitwise_and(matrix, matrix, mask=mask)
+            ret, fin = cv2.threshold(im, 15, 255, cv2.THRESH_BINARY_INV)
+            newfin = cv2.erode(fin, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)), iterations=1)
 
-        fundus_eroded = cv2.bitwise_not(newfin)
-        xmask = np.ones(self.img.shape[:2], dtype="uint8") * 255
-        xcontours, xhierarchy = cv2.findContours(fundus_eroded.copy(), cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
-        for cnt in xcontours:
-            peri = cv2.arcLength(cnt, True)
-            approx = cv2.approxPolyDP(cnt, 0.04 * peri, False)
-            if len(approx) > 4 and cv2.contourArea(cnt) <= 3000 and cv2.contourArea(cnt) >= 100:
-                shape = "circle"
-            else:
-                shape = "veins"
-            if (shape == "circle"):
-                cv2.drawContours(xmask, [cnt], -1, 0, -1)
-
+            fundus_eroded = cv2.bitwise_not(newfin)
+            xmask = np.ones(matrix.shape[:2], dtype="uint8") * 255
+            xcontours, xhierarchy = cv2.findContours(fundus_eroded.copy(), cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+            for cnt in xcontours:
+                peri = cv2.arcLength(cnt, True)
+                approx = cv2.approxPolyDP(cnt, 0.04 * peri, False)
+                if len(approx) > 4 and cv2.contourArea(cnt) <= 3000 and cv2.contourArea(cnt) >= 100:
+                    shape = "circle"
+                else:
+                    shape = "veins"
+                if (shape == "circle"):
+                    cv2.drawContours(xmask, [cnt], -1, 0, -1)
+        except Exception as e:
+            print(e)
         finimage = cv2.bitwise_and(fundus_eroded, fundus_eroded, mask=xmask)
         blood_vessels = cv2.bitwise_not(finimage)
 
